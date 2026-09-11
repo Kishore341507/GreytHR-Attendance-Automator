@@ -5,11 +5,10 @@ import json
 import ctypes
 import threading
 import webbrowser
-from datetime import date
+from datetime import date, datetime, timedelta
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageDraw
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 # --- Paths & Storage ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +23,7 @@ DEFAULT_CONFIG = {
     "password": "",
     "work_location": "Office",
     "headless": True,
-    "check_interval_seconds": 300,
+    "check_interval_seconds": 120,
     "idle_threshold_seconds": 300,
 }
 
@@ -98,18 +97,40 @@ def set_snooze(hours=1.0):
     st["snooze_until"] = time.time() + (hours * 3600)
     return save_state(st)
 
-def should_show_prompt():
+def trim_memory():
+    """Flushes unneeded process memory pages from RAM and collects garbage."""
+    if sys.platform == "win32":
+        try:
+            import gc
+            gc.collect()
+            ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+        except Exception:
+            pass
+
+def get_seconds_until_midnight():
+    """Calculates remaining seconds until midnight (next calendar day)."""
+    now = datetime.now()
+    midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+    return max(60, int((midnight - now).total_seconds()))
+
+def get_attendance_status():
+    """Determines today's attendance state: weekend, marked, skipped, snoozed, or ready."""
     today = get_today()
     if is_weekend():
-        return False, "Weekend"
+        return "weekend", "Weekend"
     st = load_state()
     if st.get("last_marked_date") == today:
-        return False, "Already marked today"
+        return "marked", "Already marked today"
     if st.get("skipped_date") == today:
-        return False, "Skipped today"
-    if st.get("snooze_until", 0) > time.time():
-        return False, "Snoozed"
-    return True, "Ready"
+        return "skipped", "Skipped today"
+    snooze_until = float(st.get("snooze_until", 0))
+    if snooze_until > time.time():
+        return "snoozed", snooze_until - time.time()
+    return "ready", "Ready"
+
+def should_show_prompt():
+    status, msg = get_attendance_status()
+    return status == "ready", msg
 
 # --- Windows Idle Detection ---
 class LASTINPUTINFO(ctypes.Structure):
@@ -138,6 +159,11 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     url = url.rstrip("/")
+
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+    except ImportError:
+        return False, "Playwright library is not installed in the Python environment."
 
     print(f"[GreytHR Bot] Connecting to {url} (Headless: {headless}, Location: {work_location})...")
     try:
@@ -257,6 +283,8 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
         return False, "Connection timeout."
     except Exception as e:
         return False, f"Automation error: {str(e)}"
+    finally:
+        trim_memory()
 
 # --- UI Application ---
 class AttendanceApp:
@@ -265,6 +293,7 @@ class AttendanceApp:
         self.root = None
         self.is_popup_open = False
         self.tray_icon = None
+        self.wake_event = threading.Event()
 
     def create_tray_image(self):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -280,7 +309,6 @@ class AttendanceApp:
             menu = pystray.Menu(
                 pystray.MenuItem("Mark Attendance Now", lambda: self.prompt_now()),
                 pystray.MenuItem("Settings", lambda: self.show_settings()),
-                pystray.MenuItem("Reset Today Status", lambda: self.reset_today()),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit", lambda: self.quit_app())
             )
@@ -290,6 +318,8 @@ class AttendanceApp:
             print(f"[Tray] Warning: {e}")
 
     def quit_app(self):
+        if hasattr(self, "wake_event") and self.wake_event:
+            self.wake_event.set()
         if self.tray_icon:
             self.tray_icon.stop()
         if self.root:
@@ -346,6 +376,8 @@ class AttendanceApp:
         def close():
             self.is_popup_open = False
             win.destroy()
+            if self.root:
+                self.root.after(400, trim_memory)
 
         def do_mark():
             cfg = load_config()
@@ -365,6 +397,8 @@ class AttendanceApp:
                 def fin():
                     if ok:
                         set_marked_today()
+                        if hasattr(self, "wake_event") and self.wake_event:
+                            self.wake_event.set()
                         messagebox.showinfo("Success", "Attendance marked successfully!", parent=win)
                         close()
                     else:
@@ -378,11 +412,15 @@ class AttendanceApp:
 
         def do_skip():
             set_skipped_today()
+            if hasattr(self, "wake_event") and self.wake_event:
+                self.wake_event.set()
             messagebox.showinfo("Skipped", "Attendance prompts skipped for today.", parent=win)
             close()
 
         def do_snooze():
             set_snooze(1.0)
+            if hasattr(self, "wake_event") and self.wake_event:
+                self.wake_event.set()
             messagebox.showinfo("Snoozed", "Notification snoozed for 1 hour.", parent=win)
             close()
 
@@ -478,6 +516,11 @@ class AttendanceApp:
         head_var = tk.BooleanVar(value=cfg.get("headless", True))
         tk.Checkbutton(form, text="Headless", variable=head_var, font=("Segoe UI", 9), fg="#fafafa", bg="#09090b", selectcolor="#18181b", activebackground="#09090b", cursor="hand2").pack(anchor="w", pady=(0, 16))
 
+        def on_close():
+            win.destroy()
+            if self.root:
+                self.root.after(400, trim_memory)
+
         def save():
             u, usr, pwd = e_url.get().strip(), e_usr.get().strip(), e_pwd.get().strip()
             if not u or not usr or not pwd:
@@ -486,8 +529,12 @@ class AttendanceApp:
             if not u.startswith(("http://", "https://")):
                 u = "https://" + u
             save_config({"greythr_url": u, "username": usr, "password": pwd, "work_location": loc_var.get(), "headless": head_var.get()})
+            if hasattr(self, "wake_event") and self.wake_event:
+                self.wake_event.set()
             messagebox.showinfo("Saved", "Settings saved successfully!", parent=win)
-            win.destroy()
+            on_close()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
 
         tk.Button(form, text="💾 Save Configuration", font=("Segoe UI", 10, "bold"), fg="#09090b", bg="#fafafa", activebackground="#e4e4e7", bd=0, pady=9, cursor="hand2", command=save).pack(fill="x", pady=(10, 0))
 
@@ -496,16 +543,32 @@ class AttendanceApp:
         credit.bind("<Button-1>", lambda e: webbrowser.open_new_tab("https://github.com/Kishore341507"))
 
     def loop(self):
+        # Allow initial setup to finish, then trim initial memory footprint
+        self.wake_event.wait(timeout=3)
+        trim_memory()
+
         while True:
+            sleep_duration = 120  # Default check interval: 2 minutes
             try:
-                ok, _ = should_show_prompt()
-                if ok:
+                status, detail = get_attendance_status()
+
+                if status in ("marked", "skipped", "weekend"):
+                    # Sleep 1 hour (3600 seconds) or until midnight, whichever is shorter
+                    sleep_duration = min(3600, get_seconds_until_midnight())
+                elif status == "snoozed":
+                    # Sleep for the remaining snooze duration (up to 1 hour, at least 30s)
+                    remaining_snooze = int(detail)
+                    sleep_duration = max(30, min(remaining_snooze, 3600))
+                elif status == "ready":
                     cfg = load_config()
                     if is_user_active(float(cfg.get("idle_threshold_seconds", 300))):
                         self.prompt_now()
+                    sleep_duration = 120  # 2 minutes default check interval
             except Exception:
-                pass
-            time.sleep(30)
+                sleep_duration = 120
+
+            self.wake_event.wait(timeout=sleep_duration)
+            self.wake_event.clear()
 
     def start(self):
         threading.Thread(target=self.run_tray, daemon=True).start()
