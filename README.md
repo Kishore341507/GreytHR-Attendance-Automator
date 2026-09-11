@@ -16,25 +16,45 @@ An automated, intelligent Windows background utility that reminds and helps you 
 
 ---
 
-## 🚀 Quick & Easy Setup (1-Click)
+## 🚀 Quick & Easy Setup
 
 ### Prerequisites
 - **Windows 10 / 11**
 - **Python 3.9 or newer**: Download from [python.org](https://www.python.org/downloads/) if not already installed.
   > ⚠️ **Important**: When installing Python, ensure the option **"Add python.exe to PATH"** is checked!
+- **Git** installed on your system.
 
 ---
 
-### Step 1: Run the Automated Setup
-1. Open this project folder in File Explorer.
-2. Double-click **`setup.bat`**.
+### ⚡ Option A: 1-Line Terminal Install (Fastest)
 
-That's it! `setup.bat` automatically handles everything:
+Open **PowerShell** or **Terminal** and paste this single command:
+
+```powershell
+git clone https://github.com/Kishore341507/GreytHR-Attendance-Automator.git; cd GreytHR-Attendance-Automator; .\setup.bat
+```
+
+*(Or in classic **Command Prompt / CMD**:)*
+```cmd
+git clone https://github.com/Kishore341507/GreytHR-Attendance-Automator.git && cd GreytHR-Attendance-Automator && setup.bat
+```
+
+---
+
+### 🖱️ Option B: Manual / File Explorer
+
+1. Download or clone this repository.
+2. Open the `GreytHR-Attendance-Automator` folder.
+3. Double-click **`setup.bat`**.
+
+---
+
+### What `setup.bat` does automatically:
 - Creates an isolated Python virtual environment (`venv`).
 - Installs required dependencies (`playwright`, `pystray`, `Pillow`).
 - Downloads the Playwright Chromium automation engine.
-- Configures auto-start on Windows boot.
-- Launches the application silently in the background.
+- Configures auto-start on Windows boot (places a shortcut in your Startup folder).
+- Launches the application silently in your Windows System Tray.
 
 ---
 
