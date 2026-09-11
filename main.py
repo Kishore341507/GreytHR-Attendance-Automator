@@ -196,10 +196,22 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
                 pass
             time.sleep(5)
 
-            # Check invalid credentials
-            err = page.locator('.error, .alert-danger, [class*="error-msg"], [class*="login-error"]')
-            if err.count() > 0 and err.first.is_visible():
+            # Check invalid credentials or if still on login page
+            err = page.locator('.error, .alert-danger, [class*="error-msg"], [class*="login-error"], [class*="danger"], [role="alert"]')
+            if err.count() > 0 and err.first.is_visible() and err.first.inner_text().strip():
                 msg = err.first.inner_text().strip()
+                browser.close()
+                return False, f"Login failed: {msg}"
+
+            if p_field.is_visible() or "/auth/login" in page.url.lower():
+                msg = "Invalid User ID or Password. Please try again."
+                try:
+                    for line in page.locator("body").inner_text().splitlines():
+                        if "invalid user id or password" in line.lower():
+                            msg = line.strip()
+                            break
+                except Exception:
+                    pass
                 browser.close()
                 return False, f"Login failed: {msg}"
 
