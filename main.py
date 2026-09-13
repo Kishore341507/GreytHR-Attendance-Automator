@@ -82,6 +82,24 @@ def get_today():
 def is_weekend():
     return date.today().weekday() >= 5
 
+# Fixed Office Hours: 9:00 AM to 8:00 PM (20:00)
+OFFICE_START_HOUR = 9
+OFFICE_END_HOUR = 20
+
+def is_office_hours():
+    now = datetime.now()
+    start_dt = datetime.combine(now.date(), datetime.min.time()).replace(hour=OFFICE_START_HOUR, minute=0)
+    end_dt = datetime.combine(now.date(), datetime.min.time()).replace(hour=OFFICE_END_HOUR, minute=0)
+    return start_dt <= now <= end_dt
+
+def get_seconds_until_office_start():
+    now = datetime.now()
+    start_dt = datetime.combine(now.date(), datetime.min.time()).replace(hour=OFFICE_START_HOUR, minute=0)
+    if now < start_dt:
+        return max(60, int((start_dt - now).total_seconds()))
+    next_start_dt = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()).replace(hour=OFFICE_START_HOUR, minute=0)
+    return max(60, int((next_start_dt - now).total_seconds()))
+
 def set_marked_today():
     st = load_state()
     st["last_marked_date"], st["snooze_until"] = get_today(), 0
@@ -114,10 +132,12 @@ def get_seconds_until_midnight():
     return max(60, int((midnight - now).total_seconds()))
 
 def get_attendance_status():
-    """Determines today's attendance state: weekend, marked, skipped, snoozed, or ready."""
+    """Determines today's attendance state: weekend, outside_hours, marked, skipped, snoozed, or ready."""
     today = get_today()
     if is_weekend():
         return "weekend", "Weekend"
+    if not is_office_hours():
+        return "outside_hours", get_seconds_until_office_start()
     st = load_state()
     if st.get("last_marked_date") == today:
         return "marked", "Already marked today"
@@ -567,6 +587,9 @@ class AttendanceApp:
                 if status in ("marked", "skipped", "weekend"):
                     # Sleep 1 hour (3600 seconds) or until midnight, whichever is shorter
                     sleep_duration = min(3600, get_seconds_until_midnight())
+                elif status == "outside_hours":
+                    # Sleep until office hours start (or up to 30 mins before re-checking)
+                    sleep_duration = max(60, min(int(detail), 1800))
                 elif status == "snoozed":
                     # Sleep for the remaining snooze duration (up to 1 hour, at least 30s)
                     remaining_snooze = int(detail)
