@@ -172,9 +172,15 @@ def is_user_active(threshold=300.0):
     return get_idle_seconds() < threshold
 
 # --- GreytHR Automation Bot ---
-def mark_greythr_attendance(url, username, password, work_location="Office", headless=False, timeout_ms=45000):
+def mark_greythr_attendance(url, username, password, work_location="Office", headless=False, timeout_ms=45000, status_cb=None):
     if not url or not username or not password:
         return False, "Missing GreytHR URL, Username, or Password."
+
+    def notify(msg):
+        print(f"[GreytHR Bot] {msg}")
+        if status_cb:
+            try: status_cb(msg)
+            except Exception: pass
 
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -185,7 +191,7 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
     except ImportError:
         return False, "Playwright library is not installed in the Python environment."
 
-    print(f"[GreytHR Bot] Connecting to {url} (Headless: {headless}, Location: {work_location})...")
+    notify(f"Connecting to portal (Headless: {headless})...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=headless, args=["--start-maximized", "--disable-blink-features=AutomationControlled"])
@@ -193,7 +199,7 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
             page = context.new_page()
 
             # 1. Login
-            print("[GreytHR Bot] Navigating to login page...")
+            notify("Navigating to login page...")
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             time.sleep(1)
 
@@ -203,13 +209,14 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
                 browser.close()
                 return False, "Login fields not found."
 
+            notify("Entering credentials & signing in...")
             u_field.fill(username)
             p_field.fill(password)
 
             login_btn = page.locator('button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")').first
             login_btn.click() if login_btn.is_visible() else page.keyboard.press("Enter")
 
-            print("[GreytHR Bot] Logged in. Waiting for dashboard to load...")
+            notify("Logged in. Waiting for dashboard...")
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=12000)
             except Exception:
@@ -236,20 +243,20 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
                 return False, f"Login failed: {msg}"
 
             # 2. Check dashboard status (poll up to 25s)
-            print("[GreytHR Bot] Checking dashboard status (polling up to 25s for attendance card)...")
+            notify("Checking dashboard attendance status...")
             found_sign_in = False
             for i in range(25):
                 # Already marked check
                 sign_out = page.locator('button:has-text("Sign Out"), gt-button:has-text("Sign Out"), [data-automation-id="sign-out"]')
                 if sign_out.count() > 0 and sign_out.first.is_visible():
-                    print("[GreytHR Bot] 'Sign Out' button detected! Attendance already marked today.")
+                    notify("Attendance already marked today!")
                     browser.close()
                     return True, "Attendance is already marked for today!"
 
                 # Sign In button check
                 sign_in = page.locator('button:has-text("Sign In"), gt-button:has-text("Sign In"), button.btn-primary:has-text("Sign In"), [data-automation-id="sign-in-btn"], button:has-text("Swipe In")')
                 if sign_in.count() > 0 and sign_in.first.is_visible():
-                    print(f"[GreytHR Bot] Located 'Sign In' on dashboard after {i+1}s. Clicking...")
+                    notify(f"Located 'Sign In' button. Clicking...")
                     sign_in.first.click()
                     found_sign_in = True
                     break
@@ -265,7 +272,7 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
             time.sleep(2)
 
             # 3. Select location via Shadow DOM
-            print(f"[GreytHR Bot] Waiting for modal and selecting '{work_location}' in gt-dropdown...")
+            notify(f"Selecting location '{work_location}'...")
             try:
                 page.locator('gt-dropdown, [role="modal"], .highlight-modal').first.wait_for(state="visible", timeout=6000)
             except Exception:
@@ -294,7 +301,7 @@ def mark_greythr_attendance(url, username, password, work_location="Office", hea
             time.sleep(1)
 
             # 4. Click Modal Sign In
-            print("[GreytHR Bot] Submitting modal 'Sign In'...")
+            notify("Submitting attendance...")
             modal_btn = page.locator('[role="modal"] gt-button:has-text("Sign In"), [role="modal"] button:has-text("Sign In"), .highlight-modal gt-button:has-text("Sign In"), .highlight-modal button:has-text("Sign In"), .modal-footer-container gt-button:has-text("Sign In"), .modal-footer-container button:has-text("Sign In")')
             if modal_btn.count() > 0 and modal_btn.last.is_visible():
                 modal_btn.last.click(force=True)
@@ -425,7 +432,11 @@ class AttendanceApp:
             win.update()
 
             def task():
-                ok, msg = mark_greythr_attendance(cfg.get("greythr_url"), cfg.get("username"), cfg.get("password"), cfg.get("work_location", "Office"), cfg.get("headless", True))
+                ok, msg = mark_greythr_attendance(
+                    cfg.get("greythr_url"), cfg.get("username"), cfg.get("password"),
+                    cfg.get("work_location", "Office"), cfg.get("headless", True),
+                    status_cb=lambda s: win.after(0, lambda: load_var.set(s)) if win.winfo_exists() else None
+                )
                 def fin():
                     if ok:
                         set_marked_today()
